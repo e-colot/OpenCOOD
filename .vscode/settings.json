@@ -1,0 +1,41 @@
+{
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "latexmk (WSL .exe)",
+      "tools": [
+        "latexmk-wsl"
+      ]
+    },
+    {
+      "name": "pdflatex x2 (WSL .exe)",
+      "tools": [
+        "pdflatex-wsl",
+        "pdflatex-wsl"
+      ]
+    }
+  ],
+  "latex-workshop.latex.tools": [
+    {
+      "name": "latexmk-wsl",
+      "command": "latexmk.exe",
+      "args": [
+        "-synctex=1",
+        "-interaction=nonstopmode",
+        "-file-line-error",
+        "-pdf",
+        "%DOCFILE%.tex"
+      ]
+    },
+    {
+      "name": "pdflatex-wsl",
+      "command": "pdflatex.exe",
+      "args": [
+        "-synctex=1",
+        "-interaction=nonstopmode",
+        "-file-line-error",
+        "%DOCFILE%.tex"
+      ]
+    }
+  ],
+  "latex-workshop.latex.recipe.default": "first"
+}

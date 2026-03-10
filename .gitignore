@@ -138,3 +138,16 @@ opv2v_data_dumping
 checkpoints
 DCOS.md
 spconv/
+
+# LaTeX documentation build artifacts
+documentation/*.aux
+documentation/*.bbl
+documentation/*.bcf
+documentation/*.blg
+documentation/*.fdb_latexmk
+documentation/*.fls
+documentation/*.log
+documentation/*.out
+documentation/*.run.xml
+documentation/*.synctex.gz
+documentation/*.toc

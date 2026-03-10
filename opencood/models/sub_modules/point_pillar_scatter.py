@@ -14,31 +14,29 @@ class PointPillarScatter(nn.Module):
     def forward(self, batch_dict):
         pillar_features, coords = batch_dict['pillar_features'], batch_dict[
             'voxel_coords']
-        batch_spatial_features = []
-        batch_size = coords[:, 0].max().int().item() + 1
+        voxel_num_points = batch_dict.get('voxel_num_points', None)
 
-        for batch_idx in range(batch_size):
-            spatial_feature = torch.zeros(
-                self.num_bev_features,
-                self.nz * self.nx * self.ny,
-                dtype=pillar_features.dtype,
-                device=pillar_features.device)
+        # Ignore padded empty voxels so static-shape padding does not pollute BEV.
+        if voxel_num_points is not None:
+            valid_mask = voxel_num_points > 0
+            pillar_features = pillar_features[valid_mask, :]
+            coords = coords[valid_mask, :]
 
-            batch_mask = coords[:, 0] == batch_idx
-            this_coords = coords[batch_mask, :]
+        batch_size = batch_dict['record_len'].to(torch.long).sum()
+        batch_spatial_features = torch.zeros(
+            batch_size,
+            self.num_bev_features,
+            self.nz * self.nx * self.ny,
+            dtype=pillar_features.dtype,
+            device=pillar_features.device)
 
-            indices = this_coords[:, 1] + \
-                      this_coords[:, 2] * self.nx + \
-                      this_coords[:, 3]
-            indices = indices.type(torch.long)
+        batch_indices = coords[:, 0].long()
+        flat_indices = coords[:, 1] + \
+                       coords[:, 2] * self.nx + \
+                       coords[:, 3]
+        flat_indices = flat_indices.long()
 
-            pillars = pillar_features[batch_mask, :]
-            pillars = pillars.t()
-            spatial_feature[:, indices] = pillars
-            batch_spatial_features.append(spatial_feature)
-
-        batch_spatial_features = \
-            torch.stack(batch_spatial_features, 0)
+        batch_spatial_features[batch_indices, :, flat_indices] = pillar_features
         batch_spatial_features = \
             batch_spatial_features.view(batch_size, self.num_bev_features *
                                         self.nz, self.ny, self.nx)

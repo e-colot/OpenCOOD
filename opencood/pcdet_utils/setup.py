@@ -4,6 +4,11 @@ from setuptools import find_packages, setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 
+if 'TORCH_CUDA_ARCH_LIST' not in os.environ:
+    # CUDA 12.1 cannot compile Blackwell (compute_120); cap defaults to widely supported archs.
+    os.environ['TORCH_CUDA_ARCH_LIST'] = '8.6;8.9;9.0'
+
+
 def make_cuda_ext(name, module, sources):
     cuda_ext = CUDAExtension(
         name='%s.%s' % (module, name),

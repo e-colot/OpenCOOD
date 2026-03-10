@@ -171,6 +171,8 @@ def eval_final_results(result_stat, save_path, global_sort_detections):
     output_file = 'eval.yaml' if not global_sort_detections else 'eval_global_sort.yaml'
     yaml_utils.save_yaml(dump_dict, os.path.join(save_path, output_file))
 
-    print('The Average Precision at IOU 0.3 is %.2f, '
-          'The Average Precision at IOU 0.5 is %.2f, '
-          'The Average Precision at IOU 0.7 is %.2f' % (ap_30, ap_50, ap_70))
+    print(
+        f'The Average Precision at IOU 0.3 is {ap_30:.4f}\n'
+        f'The Average Precision at IOU 0.5 is {ap_50:.4f}\n'
+        f'The Average Precision at IOU 0.7 is {ap_70:.4f}\n'
+    )

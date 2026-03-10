@@ -6,6 +6,7 @@
 import argparse
 import os
 import time
+import warnings
 from tqdm import tqdm
 
 import torch
@@ -18,6 +19,13 @@ from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
 from opencood.visualization import vis_utils
 import matplotlib.pyplot as plt
+
+# removes a single warning at start of inference
+warnings.filterwarnings(
+    'ignore',
+    message='invalid value encountered in intersection',
+    category=RuntimeWarning,
+)
 
 
 def test_parser():
@@ -41,6 +49,8 @@ def test_parser():
                         help='whether to globally sort detections by confidence score.'
                              'If set to True, it is the mainstream AP computing method,'
                              'but would increase the tolerance for FP (False Positives).')
+    parser.add_argument('--test', action='store_true',
+                        help='use validation split by replacing ../test/ with ../validate/ in validate_dir')
     opt = parser.parse_args()
     return opt
 
@@ -53,6 +63,13 @@ def main():
                                                     'image mode or video mode'
 
     hypes = yaml_utils.load_yaml(None, opt)
+    if opt.test and 'validate_dir' in hypes:
+        validate_dir = hypes['validate_dir'].rstrip('/')
+        if validate_dir.endswith('test'):
+            hypes['validate_dir'] = validate_dir[:-4] + 'validate'
+        else:
+            hypes['validate_dir'] = os.path.join(os.path.dirname(validate_dir),
+                                                 'validate')
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
@@ -100,7 +117,11 @@ def main():
             vis_aabbs_gt.append(o3d.geometry.LineSet())
             vis_aabbs_pred.append(o3d.geometry.LineSet())
 
-    for i, batch_data in tqdm(enumerate(data_loader)):
+    total_batches = len(data_loader)
+    pbar = tqdm(enumerate(data_loader),
+                total=total_batches,
+                desc='Inference')
+    for i, batch_data in pbar:
         # print(i)
         with torch.no_grad():
             batch_data = train_utils.to_device(batch_data, device)

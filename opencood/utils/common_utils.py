@@ -138,10 +138,20 @@ def compute_iou(box, boxes):
         Array of iou between box and boxes.
 
     """
-    # Calculate intersection areas
-    if np.any(np.array([box.union(b).area for b in boxes])==0):
-        print('debug')
-    iou = [box.intersection(b).area / box.union(b).area for b in boxes]
+    iou = []
+    with np.errstate(invalid='ignore'):
+        for b in boxes:
+            union_area = box.union(b).area
+            if union_area <= 0 or not np.isfinite(union_area):
+                iou.append(0.0)
+                continue
+
+            inter_area = box.intersection(b).area
+            if inter_area < 0 or not np.isfinite(inter_area):
+                iou.append(0.0)
+                continue
+
+            iou.append(inter_area / union_area)
 
     return np.array(iou, dtype=np.float32)
 

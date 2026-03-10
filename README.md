@@ -1,11 +1,11 @@
 # OpenCOOD
 
-Project documentation now includes a LaTeX quick reference in:
-
-- `documentation/main.tex`
-
-The command guide section is in:
+OpenCOOD basic commands are detailed in:
 
 - `docs/basicCommands.md`
+
+AP tracking file:
+
+- `docs/ap_results.md`
 
 

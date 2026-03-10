@@ -128,9 +128,10 @@ def get_discretized_transformation_matrix(matrix, discrete_ratio,
 
     """
     matrix = matrix[:, :, [0, 1], :][:, :, :, [0, 1, 3]]
-    # normalize the x,y transformation
-    matrix[:, :, :, -1] = matrix[:, :, :, -1] \
-                          / (discrete_ratio * downsample_rate)
+    # normalize the x,y transformation without in-place writes for ONNX export
+    rot = matrix[..., :2]
+    trans = matrix[..., 2:3] / (discrete_ratio * downsample_rate)
+    matrix = torch.cat([rot, trans], dim=-1)
 
     return matrix.type(dtype=torch.float)
 
@@ -151,6 +152,43 @@ def _torch_inverse_cast(input):
             Inversed Tensor.
 
     """
+    # Use closed-form 3x3 inverse during ONNX export to avoid unsupported ops.
+    if torch.onnx.is_in_onnx_export():
+        mat = input.to(torch.float32)
+
+        a = mat[..., 0, 0]
+        b = mat[..., 0, 1]
+        c = mat[..., 0, 2]
+        d = mat[..., 1, 0]
+        e = mat[..., 1, 1]
+        f = mat[..., 1, 2]
+        g = mat[..., 2, 0]
+        h = mat[..., 2, 1]
+        i = mat[..., 2, 2]
+
+        c00 = e * i - f * h
+        c01 = -(d * i - f * g)
+        c02 = d * h - e * g
+        c10 = -(b * i - c * h)
+        c11 = a * i - c * g
+        c12 = -(a * h - b * g)
+        c20 = b * f - c * e
+        c21 = -(a * f - c * d)
+        c22 = a * e - b * d
+
+        det = a * c00 + b * c01 + c * c02
+        eps = det.new_tensor(1e-12)
+        det = det + (det == 0).to(det.dtype) * eps
+
+        inv = torch.stack([
+            torch.stack([c00, c10, c20], dim=-1),
+            torch.stack([c01, c11, c21], dim=-1),
+            torch.stack([c02, c12, c22], dim=-1),
+        ], dim=-2)
+
+        inv = inv / det.unsqueeze(-1).unsqueeze(-1)
+        return inv.to(input.dtype)
+
     dtype = input.dtype
     if dtype not in (torch.float32, torch.float64):
         dtype = torch.float32
@@ -178,16 +216,23 @@ def normal_transform_pixel(
         tr_mat : torch.Tensor
             Normalized transform with shape :math:`(1, 3, 3)`.
     """
-    tr_mat = torch.tensor(
-        [[1.0, 0.0, -1.0], [0.0, 1.0, -1.0], [0.0, 0.0, 1.0]], device=device,
-        dtype=dtype)  # 3x3
+    # Keep these as tensor ops so ONNX tracing does not hard-code Python scalars.
+    width_t = torch.as_tensor(width, device=device, dtype=dtype)
+    height_t = torch.as_tensor(height, device=device, dtype=dtype)
+    one = torch.as_tensor(1.0, device=device, dtype=dtype)
+    eps_t = torch.as_tensor(eps, device=device, dtype=dtype)
 
-    # prevent divide by zero bugs
-    width_denom = eps if width == 1 else width - 1.0
-    height_denom = eps if height == 1 else height - 1.0
+    width_denom = torch.where(width_t == one, eps_t, width_t - one)
+    height_denom = torch.where(height_t == one, eps_t, height_t - one)
+    sx = 2.0 / width_denom
+    sy = 2.0 / height_denom
 
-    tr_mat[0, 0] = tr_mat[0, 0] * 2.0 / width_denom
-    tr_mat[1, 1] = tr_mat[1, 1] * 2.0 / height_denom
+    zero = torch.as_tensor(0.0, device=device, dtype=dtype)
+    neg_one = torch.as_tensor(-1.0, device=device, dtype=dtype)
+    row0 = torch.stack([sx, zero, neg_one], dim=0)
+    row1 = torch.stack([zero, sy, neg_one], dim=0)
+    row2 = torch.stack([zero, zero, one], dim=0)
+    tr_mat = torch.stack([row0, row1, row2], dim=0)
 
     return tr_mat.unsqueeze(0)  # 1x3x3
 
@@ -267,17 +312,15 @@ def get_rotation_matrix2d(M, dsize):
     """
     H, W = dsize
     B = M.shape[0]
-    center = torch.Tensor([W / 2, H / 2]).to(M.dtype).to(M.device).unsqueeze(0)
-    shift_m = eye_like(3, B, M.device, M.dtype)
-    shift_m[:, :2, 2] = center
+    w_t = torch.as_tensor(W, device=M.device, dtype=M.dtype)
+    h_t = torch.as_tensor(H, device=M.device, dtype=M.dtype)
+    center = torch.stack([w_t * 0.5, h_t * 0.5], dim=0)
+    center = center.unsqueeze(0).expand(B, -1)
 
-    shift_m_inv = eye_like(3, B, M.device, M.dtype)
-    shift_m_inv[:, :2, 2] = -center
+    rot = M[:, :2, :2]
+    offset = center - torch.bmm(rot, center.unsqueeze(-1)).squeeze(-1)
 
-    rotat_m = eye_like(3, B, M.device, M.dtype)
-    rotat_m[:, :2, :2] = M[:, :2, :2]
-    affine_m = shift_m @ rotat_m @ shift_m_inv
-    return affine_m[:, :2, :]  # Bx2x3
+    return torch.cat([rot, offset.unsqueeze(-1)], dim=-1)  # Bx2x3
 
 
 def get_transformation_matrix(M, dsize):
@@ -294,8 +337,8 @@ def get_transformation_matrix(M, dsize):
             Transformation matrix with shape :math:`(N, 2, 3)`.
     """
     T = get_rotation_matrix2d(M, dsize)
-    T[..., 2] += M[..., 2]
-    return T
+    trans = T[..., 2:3] + M[..., 2:3]
+    return torch.cat([T[..., :2], trans], dim=-1)
 
 
 def convert_affinematrix_to_homography(A):
@@ -309,10 +352,10 @@ def convert_affinematrix_to_homography(A):
         H : torch.Tensor
             The homography matrix with shape of :math:`(B,3,3)`.
     """
-    H: torch.Tensor = torch.nn.functional.pad(A, [0, 0, 0, 1], "constant",
-                                              value=0.0)
-    H[..., -1, -1] += 1.0
-    return H
+    batch_size = A.shape[0]
+    last_row = torch.zeros((batch_size, 1, 3), device=A.device, dtype=A.dtype)
+    last_row[..., 2] = 1.0
+    return torch.cat([A, last_row], dim=1)
 
 
 def warp_affine(
@@ -348,9 +391,31 @@ def warp_affine(
 
     # src_norm_trans_dst_norm = torch.inverse(dst_norm_trans_src_norm)
     src_norm_trans_dst_norm = _torch_inverse_cast(dst_norm_trans_src_norm)
-    grid = F.affine_grid(src_norm_trans_dst_norm[:, :2, :],
-                         [B, C, dsize[0], dsize[1]],
-                         align_corners=align_corners)
+
+    theta = src_norm_trans_dst_norm[:, :2, :]
+    if torch.onnx.is_in_onnx_export():
+        out_h, out_w = dsize
+
+        if align_corners:
+            xs = torch.linspace(-1.0, 1.0, out_w, device=src.device, dtype=src.dtype)
+            ys = torch.linspace(-1.0, 1.0, out_h, device=src.device, dtype=src.dtype)
+        else:
+            xs = (torch.arange(out_w, device=src.device, dtype=src.dtype) + 0.5) * (2.0 / out_w) - 1.0
+            ys = (torch.arange(out_h, device=src.device, dtype=src.dtype) + 0.5) * (2.0 / out_h) - 1.0
+
+        xx = xs.view(1, 1, out_w).expand(1, out_h, out_w)
+        yy = ys.view(1, out_h, 1).expand(1, out_h, out_w)
+        ones = torch.ones_like(xx)
+
+        base_grid = torch.stack([xx, yy, ones], dim=-1).view(1, -1, 3)
+        base_grid = base_grid.expand(B, -1, -1)
+
+        grid = torch.bmm(base_grid, theta.transpose(1, 2))
+        grid = grid.view(B, out_h, out_w, 2)
+    else:
+        grid = F.affine_grid(theta,
+                             [B, C, dsize[0], dsize[1]],
+                             align_corners=align_corners)
 
     return F.grid_sample(src.half() if grid.dtype==torch.half else src, 
                          grid, align_corners=align_corners, mode=mode,

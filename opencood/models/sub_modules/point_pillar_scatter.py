@@ -22,13 +22,8 @@ class PointPillarScatter(nn.Module):
             pillar_features = pillar_features[valid_mask, :]
             coords = coords[valid_mask, :]
 
-        batch_size = batch_dict['record_len'].to(torch.long).sum()
-        batch_spatial_features = torch.zeros(
-            batch_size,
-            self.num_bev_features,
-            self.nz * self.nx * self.ny,
-            dtype=pillar_features.dtype,
-            device=pillar_features.device)
+        batch_size = int(batch_dict['record_len'].to(torch.long).sum().item())
+        spatial_size = self.nz * self.nx * self.ny
 
         batch_indices = coords[:, 0].long()
         flat_indices = coords[:, 1] + \
@@ -36,7 +31,35 @@ class PointPillarScatter(nn.Module):
                        coords[:, 3]
         flat_indices = flat_indices.long()
 
-        batch_spatial_features[batch_indices, :, flat_indices] = pillar_features
+        if torch.onnx.is_in_onnx_export():
+            # ONNX does not support this advanced index assignment pattern,
+            # so use export-friendly scatter per batch instead.
+            batch_spatial_list = []
+            for b in range(batch_size):
+                b_mask = batch_indices == b
+                idx_b = flat_indices[b_mask]
+                feat_b = pillar_features[b_mask].transpose(0, 1)
+
+                spatial_b = torch.zeros(
+                    self.num_bev_features,
+                    spatial_size,
+                    dtype=pillar_features.dtype,
+                    device=pillar_features.device,
+                )
+                scatter_index = idx_b.unsqueeze(0).expand(self.num_bev_features, -1)
+                spatial_b = spatial_b.scatter(1, scatter_index, feat_b)
+                batch_spatial_list.append(spatial_b.unsqueeze(0))
+
+            batch_spatial_features = torch.cat(batch_spatial_list, dim=0)
+        else:
+            batch_spatial_features = torch.zeros(
+                batch_size,
+                self.num_bev_features,
+                spatial_size,
+                dtype=pillar_features.dtype,
+                device=pillar_features.device)
+            batch_spatial_features[batch_indices, :, flat_indices] = pillar_features
+
         batch_spatial_features = \
             batch_spatial_features.view(batch_size, self.num_bev_features *
                                         self.nz, self.ny, self.nx)

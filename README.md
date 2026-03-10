@@ -6,6 +6,6 @@ OpenCOOD basic commands are detailed in:
 
 AP tracking file:
 
-- `docs/ap_results.md`
+- `docs/results.md`
 
 

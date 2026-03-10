@@ -1,0 +1,115 @@
+# TensorRT Build and Test Tutorial
+
+This tutorial explains two TensorRT deployment paths and how to evaluate AP:
+
+- Path A: PyTorch -> ONNX -> TensorRT engine
+- Path B: Direct PyTorch -> TensorRT (Torch-TensorRT)
+
+## Prerequisites
+
+- TensorRT installed, including trtexec.
+- Python bindings for TensorRT and pycuda available in the environment.
+- ONNX model already exported.
+- For direct path: Torch-TensorRT installed in the same Python environment.
+
+Example direct path install (version must match your CUDA/PyTorch stack):
+
+```bash
+pip install torch-tensorrt
+```
+
+## 1. Build TensorRT engine from ONNX
+
+```bash
+python3 opencood/tools/build_tensorrt_engine.py \
+  --onnx_model <MODEL_DIR>/pipeline_a/model.onnx \
+  --engine_path <MODEL_DIR>/pipeline_a/model_fp32.engine
+```
+
+Optional FP16 build:
+
+```bash
+python3 opencood/tools/build_tensorrt_engine.py \
+  --onnx_model <MODEL_DIR>/pipeline_a/model.onnx \
+  --engine_path <MODEL_DIR>/pipeline_a/model_fp16.engine \
+  --fp16
+```
+
+Optional shape profile example:
+
+```bash
+python3 opencood/tools/build_tensorrt_engine.py \
+  --onnx_model <MODEL_DIR>/pipeline_a/model.onnx \
+  --engine_path <MODEL_DIR>/pipeline_a/model_fp16.engine \
+  --fp16 \
+  --min_shapes "voxel_features:1x32x4,voxel_coords:1x4,voxel_num_points:1" \
+  --opt_shapes "voxel_features:12000x32x4,voxel_coords:12000x4,voxel_num_points:12000" \
+  --max_shapes "voxel_features:20000x32x4,voxel_coords:20000x4,voxel_num_points:20000"
+```
+
+## 2. Run TensorRT inference and AP evaluation
+
+```bash
+python3 opencood/tools/inference_tensorrt.py \
+  --model_dir <MODEL_DIR> \
+  --engine_path <MODEL_DIR>/pipeline_a/model_fp32.engine \
+  --fusion_method <early|late|intermediate> \
+  --output_yaml pipeline_a/eval_tensorrt.yaml \
+  --test
+```
+
+Output:
+
+- AP metrics are saved to <MODEL_DIR>/pipeline_a/eval_tensorrt.yaml.
+
+## 3. Build direct PyTorch -> TensorRT artifact (Torch-TensorRT)
+
+```bash
+python3 opencood/tools/build_tensorrt_engine_direct.py \
+  --model_dir <MODEL_DIR> \
+  --fusion_method <early|late|intermediate> \
+  --output <MODEL_DIR>/pipeline_b/model_trt.ts \
+  --precision fp32
+```
+
+Optional FP16 direct compile:
+
+```bash
+python3 opencood/tools/build_tensorrt_engine_direct.py \
+  --model_dir <MODEL_DIR> \
+  --fusion_method <early|late|intermediate> \
+  --output <MODEL_DIR>/pipeline_b/model_trt_fp16.ts \
+  --precision fp16
+```
+
+This command also writes metadata at `<artifact>.meta.yaml` with input order and precision.
+
+## 4. Run AP evaluation for direct TensorRT artifact
+
+```bash
+python3 opencood/tools/inference_tensorrt_direct.py \
+  --model_dir <MODEL_DIR> \
+  --trt_module <MODEL_DIR>/pipeline_b/model_trt.ts \
+  --fusion_method <early|late|intermediate> \
+  --output_yaml pipeline_b/eval_tensorrt_direct.yaml \
+  --test
+```
+
+Output:
+
+- AP metrics are saved to <MODEL_DIR>/pipeline_b/eval_tensorrt_direct.yaml.
+
+## 5. Record results in docs/results.md
+
+Add both TensorRT paths and AP deltas versus PyTorch baseline in docs/results.md.
+
+## Troubleshooting
+
+- Python import error for pycuda or tensorrt:
+  Confirm the active environment matches the TensorRT installation.
+- Engine build fails:
+  Try FP32 first, then FP16.
+- Dynamic shape runtime errors:
+  Rebuild engine with explicit min/opt/max shape profiles.
+- torch_tensorrt import/compile error:
+  Verify Torch-TensorRT version matches installed CUDA, TensorRT, and PyTorch.

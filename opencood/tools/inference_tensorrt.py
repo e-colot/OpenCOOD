@@ -4,6 +4,7 @@
 import argparse
 import importlib
 import os
+import time
 import warnings
 from collections import OrderedDict
 
@@ -39,6 +40,14 @@ def parse_args():
                         help='Use validation split by replacing test with validate')
     parser.add_argument('--output_yaml', type=str, default='pipeline_a/eval_tensorrt.yaml',
                         help='Output AP yaml filename under model_dir')
+    parser.add_argument('--profile_runtime', action='store_true',
+                        help='Collect end-to-end per-sample latency and peak GPU memory metrics')
+    parser.add_argument('--profile_warmup_steps', type=int, default=10,
+                        help='Number of initial samples ignored for runtime/memory statistics')
+    parser.add_argument('--profile_max_samples', type=int, default=0,
+                        help='Maximum profiled samples after warmup (0 = profile all samples)')
+    parser.add_argument('--profile_yaml', type=str, default='pipeline_a/profile_tensorrt.yaml',
+                        help='Profiling output yaml path under model_dir')
     return parser.parse_args()
 
 
@@ -201,6 +210,37 @@ def _calculate_and_save(result_stat, model_dir, output_yaml, global_sort_detecti
     )
 
 
+def _maybe_sync_cuda(device):
+    if device.type == 'cuda':
+        torch.cuda.synchronize(device)
+
+
+def _build_profile_summary(latencies_ms, peak_mem_mb):
+    if not latencies_ms:
+        return {'profiled_samples': 0}
+
+    latency_arr = np.array(latencies_ms, dtype=np.float64)
+    mem_arr = np.array(peak_mem_mb, dtype=np.float64) if peak_mem_mb else np.array([], dtype=np.float64)
+
+    summary = {
+        'profiled_samples': int(latency_arr.shape[0]),
+        'latency_ms_mean': float(np.mean(latency_arr)),
+        'latency_ms_p50': float(np.percentile(latency_arr, 50)),
+        'latency_ms_p95': float(np.percentile(latency_arr, 95)),
+        'latency_ms_max': float(np.max(latency_arr)),
+    }
+
+    if mem_arr.size > 0:
+        summary.update({
+            'peak_gpu_mem_mb_mean': float(np.mean(mem_arr)),
+            'peak_gpu_mem_mb_p50': float(np.percentile(mem_arr, 50)),
+            'peak_gpu_mem_mb_p95': float(np.percentile(mem_arr, 95)),
+            'peak_gpu_mem_mb_max': float(np.max(mem_arr)),
+        })
+
+    return summary
+
+
 def main():
     args = parse_args()
 
@@ -221,6 +261,8 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     result_stat = _init_result_stat()
+    latency_ms = []
+    peak_mem_mb = []
 
     pbar = tqdm(enumerate(data_loader),
                 total=len(data_loader),
@@ -228,6 +270,11 @@ def main():
 
     for i, batch_data in pbar:
         with torch.no_grad():
+            if args.profile_runtime and device.type == 'cuda':
+                torch.cuda.reset_peak_memory_stats(device)
+                _maybe_sync_cuda(device)
+            start_time = time.perf_counter() if args.profile_runtime else None
+
             batch_data = train_utils.to_device(batch_data, device)
             output_dict = OrderedDict()
 
@@ -255,10 +302,34 @@ def main():
                                                    i,
                                                    npy_save_path)
 
+            if args.profile_runtime:
+                _maybe_sync_cuda(device)
+                sample_latency_ms = (time.perf_counter() - start_time) * 1000.0
+                should_record = i >= args.profile_warmup_steps and (
+                    args.profile_max_samples <= 0 or len(latency_ms) < args.profile_max_samples
+                )
+                if should_record:
+                    latency_ms.append(sample_latency_ms)
+                    if device.type == 'cuda':
+                        peak_mem_mb.append(torch.cuda.max_memory_allocated(device) / (1024.0 ** 2))
+
     _calculate_and_save(result_stat,
                         args.model_dir,
                         args.output_yaml,
                         args.global_sort_detections)
+
+    if args.profile_runtime:
+        profile_summary = _build_profile_summary(latency_ms, peak_mem_mb)
+        profile_summary.update({
+            'backend': 'tensorrt',
+            'fusion_method': args.fusion_method,
+            'warmup_steps': int(args.profile_warmup_steps),
+            'profile_max_samples': int(args.profile_max_samples),
+        })
+        out_path = os.path.join(args.model_dir, args.profile_yaml)
+        yaml_utils.save_yaml(profile_summary, out_path)
+        print(f'Runtime profile saved to {out_path}')
+        print(profile_summary)
 
 
 if __name__ == '__main__':

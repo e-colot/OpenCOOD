@@ -9,7 +9,7 @@ Comparison target: absolute AP delta <= 0.5% versus PyTorch baseline per IoU.
 | Model Name | Backend | AP@IoU=0.3 | Delta@0.3 (%) | AP@IoU=0.5 | Delta@0.5 (%) | AP@IoU=0.7 | Delta@0.7 (%) | Notes |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | ---: |
 | v2x-vit | PyTorch | 0.8924 | - | 0.8410 | - | 0.6164 | - | baseline |
-| v2x-vit | ONNX Runtime | 0.8428 | -4.96% | 0.8066 | -3.44% | 0.6087 | -0.77% | regroup+scatter parity fixes |
+| v2x-vit | ONNX Runtime | 0.8141 | -7.83% | 0.7741 | -6.69% | 0.5651 | -5.13% | graph_optimization_level=none |
 | v2x-vit | TensorRT (from ONNX) | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | TensorRT parser rejects ONNX AffineGrid for intermediate fusion |
 | v2x-vit | TensorRT (direct Torch-TensorRT) | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | Torch-TensorRT compile segfault (code 139) on this stack |
 

@@ -9,6 +9,7 @@ import time
 import warnings
 from tqdm import tqdm
 
+import numpy as np
 import torch
 import open3d as o3d
 from torch.utils.data import DataLoader
@@ -51,8 +52,47 @@ def test_parser():
                              'but would increase the tolerance for FP (False Positives).')
     parser.add_argument('--test', action='store_true',
                         help='use validation split by replacing ../test/ with ../validate/ in validate_dir')
+    parser.add_argument('--profile_runtime', action='store_true',
+                        help='Collect end-to-end per-sample latency and peak GPU memory metrics')
+    parser.add_argument('--profile_warmup_steps', type=int, default=10,
+                        help='Number of initial samples ignored for runtime/memory statistics')
+    parser.add_argument('--profile_max_samples', type=int, default=0,
+                        help='Maximum profiled samples after warmup (0 = profile all samples)')
+    parser.add_argument('--profile_yaml', type=str, default='pipeline_a/profile_pytorch.yaml',
+                        help='Profiling output yaml path under model_dir')
     opt = parser.parse_args()
     return opt
+
+
+def _maybe_sync_cuda(device):
+    if device.type == 'cuda':
+        torch.cuda.synchronize(device)
+
+
+def _build_profile_summary(latencies_ms, peak_mem_mb):
+    if not latencies_ms:
+        return {'profiled_samples': 0}
+
+    latency_arr = np.array(latencies_ms, dtype=np.float64)
+    mem_arr = np.array(peak_mem_mb, dtype=np.float64) if peak_mem_mb else np.array([], dtype=np.float64)
+
+    summary = {
+        'profiled_samples': int(latency_arr.shape[0]),
+        'latency_ms_mean': float(np.mean(latency_arr)),
+        'latency_ms_p50': float(np.percentile(latency_arr, 50)),
+        'latency_ms_p95': float(np.percentile(latency_arr, 95)),
+        'latency_ms_max': float(np.max(latency_arr)),
+    }
+
+    if mem_arr.size > 0:
+        summary.update({
+            'peak_gpu_mem_mb_mean': float(np.mean(mem_arr)),
+            'peak_gpu_mem_mb_p50': float(np.percentile(mem_arr, 50)),
+            'peak_gpu_mem_mb_p95': float(np.percentile(mem_arr, 95)),
+            'peak_gpu_mem_mb_max': float(np.max(mem_arr)),
+        })
+
+    return summary
 
 
 def main():
@@ -118,12 +158,19 @@ def main():
             vis_aabbs_pred.append(o3d.geometry.LineSet())
 
     total_batches = len(data_loader)
+    latency_ms = []
+    peak_mem_mb = []
     pbar = tqdm(enumerate(data_loader),
                 total=total_batches,
                 desc='Inference')
     for i, batch_data in pbar:
         # print(i)
         with torch.no_grad():
+            if opt.profile_runtime and device.type == 'cuda':
+                torch.cuda.reset_peak_memory_stats(device)
+                _maybe_sync_cuda(device)
+            start_time = time.perf_counter() if opt.profile_runtime else None
+
             batch_data = train_utils.to_device(batch_data, device)
             if opt.fusion_method == 'late':
                 pred_box_tensor, pred_score, gt_box_tensor = \
@@ -218,9 +265,34 @@ def main():
                 vis.update_renderer()
                 time.sleep(0.001)
 
+            if opt.profile_runtime:
+                _maybe_sync_cuda(device)
+                sample_latency_ms = (time.perf_counter() - start_time) * 1000.0
+                should_record = i >= opt.profile_warmup_steps and (
+                    opt.profile_max_samples <= 0 or len(latency_ms) < opt.profile_max_samples
+                )
+                if should_record:
+                    latency_ms.append(sample_latency_ms)
+                    if device.type == 'cuda':
+                        peak_mem_mb.append(torch.cuda.max_memory_allocated(device) / (1024.0 ** 2))
+
     eval_utils.eval_final_results(result_stat,
                                   opt.model_dir,
                                   opt.global_sort_detections)
+
+    if opt.profile_runtime:
+        profile_summary = _build_profile_summary(latency_ms, peak_mem_mb)
+        profile_summary.update({
+            'backend': 'pytorch',
+            'fusion_method': opt.fusion_method,
+            'warmup_steps': int(opt.profile_warmup_steps),
+            'profile_max_samples': int(opt.profile_max_samples),
+        })
+        out_path = os.path.join(opt.model_dir, opt.profile_yaml)
+        yaml_utils.save_yaml(profile_summary, out_path)
+        print(f'Runtime profile saved to {out_path}')
+        print(profile_summary)
+
     if opt.show_sequence:
         vis.destroy_window()
 

@@ -1,0 +1,40 @@
+dynamic_shapes: true
+input_names:
+- voxel_features
+- voxel_coords
+- voxel_num_points
+- prior_encoding
+- spatial_correction_matrix
+onnx_path: opencood/v2x-vit/pipeline_a/dynamic_model.onnx
+output_names:
+- psm
+- rm
+suggested_trt_profile:
+  max_shapes: voxel_features:22738x32x4,voxel_coords:22738x4,voxel_num_points:22738,prior_encoding:1x8x3,spatial_correction_matrix:1x8x4x4
+  min_shapes: voxel_features:1x32x4,voxel_coords:1x4,voxel_num_points:1,prior_encoding:1x1x3,spatial_correction_matrix:1x1x4x4
+  opt_shapes: voxel_features:11369x32x4,voxel_coords:11369x4,voxel_num_points:11369,prior_encoding:1x5x3,spatial_correction_matrix:1x5x4x4
+trace_input_dtypes:
+  prior_encoding: float32
+  spatial_correction_matrix: float32
+  voxel_coords: int32
+  voxel_features: float32
+  voxel_num_points: int32
+trace_input_shapes:
+  prior_encoding:
+  - 1
+  - 5
+  - 3
+  spatial_correction_matrix:
+  - 1
+  - 5
+  - 4
+  - 4
+  voxel_coords:
+  - 11369
+  - 4
+  voxel_features:
+  - 11369
+  - 32
+  - 4
+  voxel_num_points:
+  - 11369

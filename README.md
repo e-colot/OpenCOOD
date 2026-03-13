@@ -1,18 +1,26 @@
-# OpenCOOD
+# Documentation
 
-OpenCOOD basic commands are detailed in:
+- OpenCOOD basic commands are detailed in:
 
-- `docs/basicCommands.md`
+    `docs/basicCommands.md`
 
-AP tracking file:
+- TensorRT engine generation:
 
-- `docs/results.md`
+    `docs/engineGeneration.md`
+
+- AP evaluation:
+
+    `docs/apEvaluation.md`
+
+- AP tracking file:
+
+    `docs/results.md`
 
 ## Battle Plan
 
 Target: TensorRT-backed embedded V2X-ViT with balanced AP and runtime.
 
-### Environment lock:
+### Environment
 - Python 3.10.12
 - torch 2.7.0+cu128
 - torchvision 0.22.0+cu128
@@ -20,24 +28,34 @@ Target: TensorRT-backed embedded V2X-ViT with balanced AP and runtime.
 - onnx 1.16.2
 - onnxruntime 1.23.2
 - onnxruntime-gpu 1.23.2
-- tensorrt 10.15.1.29
+- tensorrt-cu12 10.15.1.29
+- trtexec 10.15.1.29
 - torch_tensorrt 2.7.0
 - pycuda 2026.1
+
+### About Metrics
+
+Two types of metrics are planned: 
+- AP metrics which are related to the model precision (average precision @IoU = 0.3, 0.5, 0.7). Those are device independent and can therefore be ran once.
+- Runtime metrics, which depends on the device on which the inference is ran on. Those metrics include memory usage, inference time, power consumption. 
+
+Those metrics can be measured on two different datasets: `test` and `dataset`, both being part of v2xset.
+
+More advanced metrics will allow specific AP/runtime profiling, meaning splitting the model into subblocks and evaluating each one *"independently"*.
 
 ### Checklist
 
 - Fix current pipeline:
-    - [ ] PyTorch -> ONNX -> TensorRT
-        - Validate ONNX AP metrics (artifact: `opencood/v2x-vit/pipeline_a/eval_onnx.yaml`)
-        - Validate TensorRT AP metrics (artifact: `opencood/v2x-vit/pipeline_a/eval_tensorrt.yaml`)
-        - Validate runtime profile yaml files:
-            - `opencood/v2x-vit/pipeline_a/profile_onnx.yaml`
-            - `opencood/v2x-vit/pipeline_a/profile_tensorrt.yaml`
-    - [ ] PyTorch -> TensorRT
-        - Validate TensorRT AP metrics (artifact: `opencood/v2x-vit/pipeline_b/eval_tensorrt_direct.yaml`)
+    - PyTorch -> ONNX -> TensorRT
+        - [x] PyTorch -> ONNX generation
+        - [x] Validate ONNX AP metrics 
+        - [x] ONNX -> TensorRT generation
+        - [x] Validate TensorRT AP metrics
+    - PyTorch -> TensorRT
+        - [ ] Validate TensorRT AP metrics
 
-- [ ] Validate PyTorch baseline AP metrics (artifact: `opencood/v2x-vit/eval.yaml or eval_global_sort.yaml`)
-- [ ] Validate PyTorch runtime profile (artifact: `opencood/v2x-vit/pipeline_a/profile_pytorch.yaml`)
+- [ ] Validate PyTorch baseline AP metrics
+- [ ] Validate PyTorch runtime profile
 
 - [ ] Run end-to-end pipelines on platform for runtime metrics
     - Store consolidated run logs under: `opencood/v2x-vit/benchmarks/`

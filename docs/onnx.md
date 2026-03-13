@@ -2,6 +2,10 @@
 
 This tutorial explains how to export an OpenCOOD model to ONNX and evaluate AP with ONNX Runtime.
 
+It also documents the ONNX metadata sidecar used by the TensorRT engine builder.
+
+For the consolidated AP measurement workflow and result locations, see `docs/apEvaluation.md`.
+
 ## Prerequisites
 
 - Working OpenCOOD environment.
@@ -20,6 +24,7 @@ pip install onnx onnxruntime-gpu
 python3 opencood/tools/export_onnx.py \
   --model_dir opencood/v2x-vit \
   --fusion_method intermediate \
+  --dynamic_shapes \
   --output opencood/v2x-vit/pipeline_a/model.onnx
 ```
 
@@ -29,18 +34,36 @@ Optional: validate exported ONNX with `onnx.checker`:
 python3 opencood/tools/export_onnx.py \
   --model_dir opencood/v2x-vit \
   --fusion_method intermediate \
+  --dynamic_shapes \
   --output opencood/v2x-vit/pipeline_a/model.onnx \
   --validate
 ```
 
 Notes:
 
-- The exporter uses one batch from the dataset split configured in the model config under `model_dir` (no split override flag in exporter).
-- During this search, the exporter prints `Selected trace batch total CAV: N`.
-  Here `CAV` means cooperative agents (ego + connected vehicles/infrastructure) in that traced sample.
-  The script picks the batch with the largest total CAV count (within `--max_search_batches`) to better capture the richest intermediate-fusion input shape during export.
+- The exporter scans dataset batches to choose a trace sample and derive TensorRT profile hints.
+- `--test` only controls which split is scanned for these profile hints (switches from test to validation split).
+- `--test` does not make TensorRT runtime unbounded. Final runtime limits are still defined by engine min/opt/max profiles.
+- During search, the exporter prints selected trace statistics (voxels and CAV count).
 - Exported outputs are ordered as psm and rm.
 - Intermediate fusion models require ONNX opset >= 20 (affine_grid support).
+- `--dynamic_shapes` enables dynamic axes in the exported ONNX graph. This is recommended for intermediate fusion because voxel count and cooperative-agent dimensions vary across samples.
+
+### ONNX export artifacts
+
+The exporter now writes two files:
+
+- `<MODEL_DIR>/pipeline_a/model.onnx`
+- `<MODEL_DIR>/pipeline_a/model.onnx.meta.yaml`
+
+`model.onnx.meta.yaml` includes:
+
+- `dynamic_shapes` (whether export used dynamic axes)
+- input and output names
+- traced input shapes and dtypes
+- `suggested_trt_profile` (min/opt/max shape strings for `trtexec`)
+
+This sidecar is consumed by `opencood/tools/build_tensorrt_engine.py` to build dynamic-shape TensorRT engines for intermediate fusion without manually writing shape flags.
 
 ## 2. Run ONNX Runtime inference and AP evaluation
 
@@ -57,9 +80,23 @@ Output:
 
 - AP metrics are saved to <MODEL_DIR>/pipeline_a/eval_onnx.yaml.
 
+The complete cross-backend AP procedure is documented in `docs/apEvaluation.md`.
+
 ## 3. Record results in docs/result.md
 
 Add the ONNX AP metrics and the AP delta versus the PyTorch baseline in `docs/result.md`.
+
+## 4. Next step for TensorRT
+
+After ONNX export, build TensorRT engine directly from ONNX:
+
+```bash
+python3 opencood/tools/build_tensorrt_engine.py \
+  --onnx_model <MODEL_DIR>/pipeline_a/model.onnx \
+  --engine_path <MODEL_DIR>/pipeline_a/model_fp32.engine
+```
+
+If `model.onnx.meta.yaml` exists, the script auto-loads dynamic profile hints.
 
 ## Troubleshooting
 
@@ -67,6 +104,8 @@ Add the ONNX AP metrics and the AP delta versus the PyTorch baseline in `docs/re
   Use --providers CPUExecutionProvider in inference_onnx.py.
 - Input name mismatch:
   Re-export ONNX from the exact same checkpoint and config used for inference.
+- Missing ONNX sidecar metadata for TensorRT build:
+  Re-run `export_onnx.py` so `model.onnx.meta.yaml` is regenerated.
 - Intermediate fusion export errors:
   Start with early or late fusion first, then add intermediate after parity checks.
 - Intermediate V2X-ViT export status:

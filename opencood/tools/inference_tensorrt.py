@@ -95,13 +95,38 @@ class TensorRTRunner:
             raise RuntimeError(f'Failed to deserialize TensorRT engine from {engine_path}')
         self.context = self.engine.create_execution_context()
 
-        self._binding_names = [self.engine.get_binding_name(i) for i in range(self.engine.num_bindings)]
-        self._input_names = [name for i, name in enumerate(self._binding_names)
-                             if self.engine.binding_is_input(i)]
-        self._output_names = [name for i, name in enumerate(self._binding_names)
-                              if not self.engine.binding_is_input(i)]
+        self._use_io_tensor_api = hasattr(self.engine, 'num_io_tensors')
+        if self._use_io_tensor_api:
+            self._tensor_names = [self.engine.get_tensor_name(i)
+                                  for i in range(self.engine.num_io_tensors)]
+            input_mode = self._trt.TensorIOMode.INPUT
+            self._input_names = [name for name in self._tensor_names
+                                 if self.engine.get_tensor_mode(name) == input_mode]
+            self._output_names = [name for name in self._tensor_names
+                                  if self.engine.get_tensor_mode(name) != input_mode]
+        else:
+            self._binding_names = [self.engine.get_binding_name(i)
+                                   for i in range(self.engine.num_bindings)]
+            self._binding_index = {name: i for i, name in enumerate(self._binding_names)}
+            self._input_names = [name for i, name in enumerate(self._binding_names)
+                                 if self.engine.binding_is_input(i)]
+            self._output_names = [name for i, name in enumerate(self._binding_names)
+                                  if not self.engine.binding_is_input(i)]
 
-    def infer(self, inputs):
+    def _expected_numpy_dtype(self, name):
+        trt = self._trt
+        if self._use_io_tensor_api:
+            return trt.nptype(self.engine.get_tensor_dtype(name))
+        binding_idx = self._binding_index[name]
+        return trt.nptype(self.engine.get_binding_dtype(binding_idx))
+
+    def _prepare_input_array(self, name, array):
+        expected_dtype = self._expected_numpy_dtype(name)
+        if array.dtype != expected_dtype:
+            array = array.astype(expected_dtype, copy=False)
+        return np.ascontiguousarray(array)
+
+    def _infer_legacy_bindings(self, inputs):
         trt = self._trt
         cuda = self._cuda
         bindings = [None] * self.engine.num_bindings
@@ -112,7 +137,7 @@ class TensorRTRunner:
             if self.engine.binding_is_input(idx):
                 if name not in inputs:
                     raise KeyError(f'Missing TensorRT input binding: {name}')
-                arr = np.ascontiguousarray(inputs[name])
+                arr = self._prepare_input_array(name, inputs[name])
                 self.context.set_binding_shape(idx, arr.shape)
                 dptr = cuda.mem_alloc(arr.nbytes)
                 cuda.memcpy_htod(dptr, arr)
@@ -124,6 +149,12 @@ class TensorRTRunner:
                 continue
 
             shape = tuple(self.context.get_binding_shape(idx))
+            if any(dim < 0 for dim in shape):
+                raise RuntimeError(
+                    f'Unresolved TensorRT output shape for {name}: {shape}. '
+                    'This usually means input shape is outside the engine optimization profile.'
+                )
+
             dtype = trt.nptype(self.engine.get_binding_dtype(idx))
             host_arr = np.empty(shape, dtype=dtype)
             dptr = cuda.mem_alloc(host_arr.nbytes)
@@ -142,6 +173,57 @@ class TensorRTRunner:
             dptr.free()
 
         return outputs
+
+    def _infer_io_tensors(self, inputs):
+        trt = self._trt
+        cuda = self._cuda
+        stream = cuda.Stream()
+        host_outputs = {}
+        device_buffers = []
+
+        for name in self._input_names:
+            if name not in inputs:
+                raise KeyError(f'Missing TensorRT input binding: {name}')
+            arr = self._prepare_input_array(name, inputs[name])
+            self.context.set_input_shape(name, arr.shape)
+            dptr = cuda.mem_alloc(arr.nbytes)
+            cuda.memcpy_htod_async(dptr, arr, stream)
+            self.context.set_tensor_address(name, int(dptr))
+            device_buffers.append(dptr)
+
+        for name in self._output_names:
+            shape = tuple(self.context.get_tensor_shape(name))
+            if any(dim < 0 for dim in shape):
+                raise RuntimeError(
+                    f'Unresolved TensorRT output shape for {name}: {shape}. '
+                    'This usually means input shape is outside the engine optimization profile.'
+                )
+            dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+            host_arr = np.empty(shape, dtype=dtype)
+            dptr = cuda.mem_alloc(host_arr.nbytes)
+            self.context.set_tensor_address(name, int(dptr))
+            host_outputs[name] = (host_arr, dptr)
+            device_buffers.append(dptr)
+
+        if not self.context.execute_async_v3(stream.handle):
+            raise RuntimeError('TensorRT execution failed (execute_async_v3 returned False).')
+
+        outputs = {}
+        for name, (host_arr, dptr) in host_outputs.items():
+            cuda.memcpy_dtoh_async(host_arr, dptr, stream)
+            outputs[name] = host_arr
+
+        stream.synchronize()
+
+        for dptr in device_buffers:
+            dptr.free()
+
+        return outputs
+
+    def infer(self, inputs):
+        if self._use_io_tensor_api:
+            return self._infer_io_tensors(inputs)
+        return self._infer_legacy_bindings(inputs)
 
 
 def _build_backend_inputs(cav_content, input_names):
@@ -244,8 +326,6 @@ def _build_profile_summary(latencies_ms, peak_mem_mb):
 def main():
     args = parse_args()
 
-    runner = TensorRTRunner(args.engine_path)
-
     hypes = yaml_utils.load_yaml(None, args)
     _maybe_replace_validate_split(hypes, args.test)
 
@@ -259,7 +339,13 @@ def main():
                              pin_memory=False,
                              drop_last=False)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Initialize TensorRT runtime only after worker processes are created.
+    # This avoids CUDA context inheritance issues when num_workers > 0.
+    runner = TensorRTRunner(args.engine_path)
+
+    # Keep tensors on CPU for TensorRT path; mixing torch CUDA transfers with
+    # pycuda runtime management can trigger unstable execution.
+    device = torch.device('cpu')
     result_stat = _init_result_stat()
     latency_ms = []
     peak_mem_mb = []
@@ -275,7 +361,6 @@ def main():
                 _maybe_sync_cuda(device)
             start_time = time.perf_counter() if args.profile_runtime else None
 
-            batch_data = train_utils.to_device(batch_data, device)
             output_dict = OrderedDict()
 
             if args.fusion_method == 'late':

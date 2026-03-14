@@ -17,10 +17,27 @@ class PointPillarScatter(nn.Module):
         voxel_num_points = batch_dict.get('voxel_num_points', None)
 
         # Ignore padded empty voxels so static-shape padding does not pollute BEV.
-        if voxel_num_points is not None:
-            valid_mask = voxel_num_points > 0
-            pillar_features = pillar_features[valid_mask, :]
-            coords = coords[valid_mask, :]
+        if voxel_num_points is not None and not (torch.jit.is_tracing() or torch.jit.is_scripting()):
+            # Torch-TensorRT graph transforms may momentarily expose scalar/1D
+            # variants, so normalize shapes before boolean masking.
+            if pillar_features.dim() == 1:
+                pillar_features = pillar_features.unsqueeze(-1)
+            if coords.dim() == 1:
+                coords = coords.unsqueeze(0)
+            if voxel_num_points.dim() == 0:
+                voxel_num_points = voxel_num_points.unsqueeze(0)
+
+            valid_mask = (voxel_num_points > 0).reshape(-1)
+            can_mask = (
+                pillar_features.dim() >= 2 and
+                coords.dim() >= 2 and
+                valid_mask.numel() == pillar_features.shape[0] and
+                coords.shape[0] == pillar_features.shape[0]
+            )
+
+            if can_mask:
+                pillar_features = pillar_features[valid_mask]
+                coords = coords[valid_mask]
 
         batch_size = int(batch_dict['record_len'].to(torch.long).sum().item())
         spatial_size = self.nz * self.nx * self.ny
@@ -31,7 +48,7 @@ class PointPillarScatter(nn.Module):
                        coords[:, 3]
         flat_indices = flat_indices.long()
 
-        if torch.onnx.is_in_onnx_export():
+        if torch.onnx.is_in_onnx_export() or torch.jit.is_tracing() or torch.jit.is_scripting():
             # ONNX does not support this advanced index assignment pattern,
             # so use export-friendly scatter per batch instead.
             batch_spatial_list = []

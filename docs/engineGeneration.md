@@ -121,6 +121,9 @@ python3 opencood/tools/build_tensorrt_engine_direct.py \
   --model_dir <MODEL_DIR> \
   --fusion_method <early|late|intermediate> \
   --output <MODEL_DIR>/pipeline_b/model_trt.ts \
+  --dynamic_shapes \
+  --max_search_batches 200 \
+  --max_voxels_margin 2 \
   --precision fp32 \
   --test
 ```
@@ -128,7 +131,13 @@ python3 opencood/tools/build_tensorrt_engine_direct.py \
 Basic explanation:
 
 - Compiles the PyTorch model directly to a Torch-TensorRT artifact.
-- Also writes `<MODEL_DIR>/pipeline_b/model_trt.ts.meta.yaml` with input ordering and precision.
+- Supports dynamic input shape ranges when `--dynamic_shapes` is enabled.
+- If `<MODEL_DIR>/pipeline_a/model.onnx.meta.yaml` is present, direct build reuses that profile and skips full Stage 3 scan.
+- You can pass a custom metadata file with `--profile_yaml <PATH_TO_META_YAML>`.
+- Stage 3 profile search scans the dataset; cap it with `--max_search_batches` (for example 200) to avoid long scans.
+- Use `--scan_log_interval` to print periodic Stage 3 scan progress (default: every 50 batches).
+- `--max_voxels_margin` and `--max_voxels` work the same way as in the ONNX -> TensorRT builder.
+- Also writes `<MODEL_DIR>/pipeline_b/model_trt.ts.meta.yaml` with input ordering, precision, and profile metadata.
 
 Optional FP16 build:
 
@@ -137,6 +146,9 @@ python3 opencood/tools/build_tensorrt_engine_direct.py \
   --model_dir <MODEL_DIR> \
   --fusion_method <early|late|intermediate> \
   --output <MODEL_DIR>/pipeline_b/model_trt_fp16.ts \
+  --dynamic_shapes \
+  --max_search_batches 200 \
+  --max_voxels_margin 2 \
   --precision fp16 \
   --test
 ```

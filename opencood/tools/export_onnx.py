@@ -156,7 +156,10 @@ def _update_max_shape(shape_map, name, tensor):
     shape_map[name] = [max(prev[i], shape[i]) for i in range(max_rank)]
 
 
-def _select_trace_batch_and_profile_bounds(loader, fusion_method, max_search_batches):
+def _select_trace_batch_and_profile_bounds(loader,
+                                           fusion_method,
+                                           max_search_batches,
+                                           scan_log_interval=0):
     best_batch = None
     best_num_voxels = -1
     best_total_cav = -1
@@ -197,6 +200,13 @@ def _select_trace_batch_and_profile_bounds(loader, fusion_method, max_search_bat
             best_num_voxels = num_voxels
             best_total_cav = total_cav
             best_batch = batch_data
+
+        if scan_log_interval > 0 and scanned % scan_log_interval == 0:
+            target = max_search_batches if max_search_batches > 0 else 'all'
+            print(
+                f'[scan] processed {scanned}/{target} batches '
+                f'(current best voxels={best_num_voxels}, total_cav={best_total_cav})'
+            )
 
     if best_batch is None:
         raise RuntimeError('Failed to fetch a batch for ONNX export tracing.')

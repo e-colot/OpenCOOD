@@ -16,6 +16,24 @@
 
     `docs/results.md`
 
+## TensorRT Pipelines (Short)
+
+Two deployment pipelines are maintained for V2X-ViT:
+
+- Pipeline A: PyTorch -> ONNX -> TensorRT engine
+- Pipeline B: Direct PyTorch -> TensorRT (Torch-TensorRT)
+
+Reason for having both:
+
+- Pipeline A is the stable deployment baseline and current source of truth for AP/runtime comparisons.
+- Pipeline B is an optimization track to potentially reduce conversion overhead and improve deployment workflow/runtime on some stacks.
+- Keeping both allows side-by-side AP and runtime evaluation before deciding which path to keep long-term.
+
+Current status:
+
+- Pipeline A: Active and validated for AP flow in this repository.
+- Pipeline B: Paused for intermediate-fusion V2X-ViT until direct compile compatibility issues are resolved.
+
 ## Battle Plan
 
 Target: TensorRT-backed embedded V2X-ViT with balanced AP and runtime.
@@ -51,8 +69,8 @@ More advanced metrics will allow specific AP/runtime profiling, meaning splittin
         - [x] Validate ONNX AP metrics 
         - [x] ONNX -> TensorRT generation
         - [x] Validate TensorRT AP metrics
-    - PyTorch -> TensorRT
-        - [ ] Validate TensorRT AP metrics
+    - PyTorch -> TensorRT (paused)
+        - [ ] Validate TensorRT AP metrics (paused)
 
 - [ ] Validate PyTorch baseline AP metrics
 - [ ] Validate PyTorch runtime profile

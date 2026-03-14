@@ -133,8 +133,21 @@ python3 opencood/tools/build_tensorrt_engine_direct.py \
   --model_dir <MODEL_DIR> \
   --fusion_method <early|late|intermediate> \
   --output <MODEL_DIR>/pipeline_b/model_trt.ts \
+  --dynamic_shapes \
+  --max_search_batches 200 \
+  --max_voxels_margin 2 \
   --precision fp32
 ```
+
+Direct Torch-TensorRT build is now compatible with dynamic input shapes.
+
+- Enable it with `--dynamic_shapes`.
+- If `<MODEL_DIR>/pipeline_a/model.onnx.meta.yaml` exists, direct build now reuses its profile hints and skips full Stage 3 scan.
+- You can also pass `--profile_yaml <PATH_TO_META_YAML>` explicitly.
+- `--max_search_batches` limits Stage 3 profile scanning. Use this to avoid very long full-dataset scans.
+- `--scan_log_interval` controls periodic Stage 3 progress logs (default: 50 batches).
+- `--max_voxels_margin` and `--max_voxels` are supported with the same semantics as `build_tensorrt_engine.py`.
+- The builder prints detected and final max voxel profile counts.
 
 Optional FP16 direct compile:
 
@@ -143,10 +156,13 @@ python3 opencood/tools/build_tensorrt_engine_direct.py \
   --model_dir <MODEL_DIR> \
   --fusion_method <early|late|intermediate> \
   --output <MODEL_DIR>/pipeline_b/model_trt_fp16.ts \
+  --dynamic_shapes \
+  --max_search_batches 200 \
+  --max_voxels_margin 2 \
   --precision fp16
 ```
 
-This command also writes metadata at `<artifact>.meta.yaml` with input order and precision.
+This command also writes metadata at `<artifact>.meta.yaml` with input order, precision, trace input shapes/dtypes, and suggested dynamic profile ranges.
 
 ## 4. Run AP evaluation for direct TensorRT artifact
 
